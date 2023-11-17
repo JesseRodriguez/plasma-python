@@ -2,27 +2,28 @@
 The module composed in this file is designed to handle the processing/handling
 and incorporation of electron cyclotron emission imaging data into the FRNN
 disruption prediction software suite. It contains snippets from the rest of
-the FRNN codebase, and therefore is partially redundant, particularly in the
-utility functions at the top of the file.
+the FRNN codebase, and therefore is partially redundant.
 Jesse A Rodriguez, 06/28/2021
 """
 
 import numpy as np
 import matplotlib as mpl
-#mpl.rcParams['figure.dpi']=10
 import matplotlib.pyplot as plt
-#plt.rc('font', family='tahoma')
-#font = 1
-#plt.rc('xtick', labelsize=font)
-#plt.rc('ytick', labelsize=font)
 import time
 import sys
 import os
 import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 import h5py
 import scipy.signal
 import math
+try:
+    import toksearch as ts
+    tksrch = True
+except ImportError:
+    tksrch = False
+    pass
 try:
     import MDSplus as MDS
 except ImportError:
@@ -31,6 +32,120 @@ except ImportError:
 ################################################################################
 ## Utility Functions and Globals
 ################################################################################
+def downsample_signal(signal, orig_sample_rate, decimation_factor,\
+                        time = np.array([])):
+    """
+    Downsample a given signal from original sample rate to target sample rate,
+    using a Kaiser window with beta = 3 and 12 taps. If your decimation factor
+    is greater than 10, I'd recommend applying this function several times 
+    successively. Furthermore, if your decimation factor is lower than 6, the
+    output will be delayed by more than one time-step at the target sample rate.
+    This downsampling procedure is strictly causal.
+                                    
+    Parameters:
+        signal (numpy.array): The input signal
+        time (np.array): Input time series
+        orig_sample_rate (float): Original sampling rate (Hz)
+        decimation_factor (float): factor by which you want to downsample
+                                                            
+    Returns:
+        numpy.arrays: The downsampled signal and time series
+    """
+    # Calculate decimation factor
+    target_sample_rate = orig_sample_rate/decimation_factor
+    
+    # Calculate filter coefficients
+    filter_coeffs = scipy.signal.firwin(12, target_sample_rate,\
+                        window = ('kaiser',3), fs = orig_sample_rate)
+
+    # Apply the low-pass filter using lfilter to maintain strict causality
+    filtered_signal = scipy.signal.lfilter(filter_coeffs, [1.0], signal)
+                  
+    # Decimate the filtered signal
+    downsampled_signal = filtered_signal[::decimation_factor]
+    if time.shape[0] > 0:
+        time_ds = time[::decimation_factor]
+    else:
+        time_ds = np.array([])
+                                                          
+    return downsampled_signal, time_ds
+
+
+def check_file(hdf5_path):
+    if os.path.exists(hdf5_path):
+        file_size = os.path.getsize(hdf5_path)
+        print(f"File {hdf5_path} exists. Size: {file_size} bytes.")
+    else:
+        print(f"File {hdf5_path} does not exist.")
+
+
+def process_file(filename, data_path):
+    """
+    Single step for reading out missing channel information from a single ECEI
+    data file stored as an .hdf5.
+    """
+    if np.random.uniform() < 1/100:
+        print("Processing "+filename)
+    # Process each file to determine missing channels and return counts
+    try:
+        with h5py.File(os.path.join(data_path, filename), 'r') as f:
+            miss_count = sum('missing' in key for key in f.keys())
+            missing_by_chan = {key[-9:]: 'missing' in key for key in f.keys() if key != 'time'}
+    except:
+        miss_count = 160
+        missing_by_chan = {'read failure': None}
+
+    # Return a dictionary of results for this file
+    return {
+        'filename': filename,
+        'miss_count': miss_count,
+        'missing_by_chan': missing_by_chan
+    }
+
+
+def process_file_quality(shot_no, data_path, disrupt_list):
+    """
+    Single step for reading out data quality information from a signle ECEI
+    data file stored as an .hdf5.
+    """
+    if np.random.uniform() < 1/25:
+        print("Processing shot no. "+str(shot_no))
+    # Process each file to determine missing channels and return counts
+    filename = str(shot_no)+".hdf5"
+    try:
+        with h5py.File(os.path.join(data_path, filename), 'r') as f:
+            NaN_by_chan = {}
+            low_sig_by_chan = {}
+            for key in f.keys():
+                if key != 'time' and not key.startswith('missing'):
+                    data = np.asarray(f.get(key))
+                    sig = np.sqrt(np.var(data))
+                    NaN_by_chan[key[-9:]] = np.any(np.isnan(data))
+                    low_sig_by_chan[key[-9:]] = (sig < 0.001)
+                elif key == 'time':
+                    time = np.asarray(f.get(key))
+                    if shot_no in disrupt_list[:,0]:
+                        i_disrupt = np.where(disrupt_list[:,0]==shot_no)[0][0]
+                        t_max = np.max(time)
+                        t_disrupt = disrupt_list[i_disrupt,1]
+                        ends = (t_max < t_disrupt)
+                    else:
+                        ends = False
+
+    except:
+        NaN_by_chan = {'read failure': None}
+        low_sig_by_chan = {'read failure': None}
+        ends = True
+
+    # Return a dictionary of results for this file
+    return {
+        'filename': filename,
+        'low_sig_by_chan': low_sig_by_chan,
+        'NaN_by_chan': NaN_by_chan,
+        'before_t_disrupt': ends
+    }
+
+
 def Fetch_ECEI_d3d(channel_path, shot_number, c = None, verbose = False):
     """
     Basic fetch ecei data function, uses MDSplus Connection objects and looks
@@ -140,6 +255,7 @@ def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths,\
         if shot_num == sentinel:
             break
         shot_complete = True
+        time_entered = False
         chan_done = 0
         for channel_path in channel_paths:
             save_path = channel_path[:-9]+'{}.hdf5'.format(int(shot_num))
@@ -155,6 +271,8 @@ def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths,\
                         if key.startswith('missing') and key.endswith(channel)\
                            and not try_again:
                             success = True
+                        if key == 'time':
+                            time_entered = True
                     f.close()
                 else:
                     print('Shot {} '.format(int(shot_num)),'was downloaded \
@@ -178,18 +296,23 @@ def Download_Shot(shot_num_queue, c, n_shots, n_procs, channel_paths,\
                         success = False
 
                     if success:
-                        data_two_column = np.vstack((time, data)).transpose()
+                        data_ = np.array(data)
+                        time_ = np.array(time)
                         if d_sample > 1:
+                            fs_start = 1/(time[1]-time[0])
                             n = int(math.log10(d_sample))
                             for _ in range(n):
-                                data_two_column = scipy.signal.decimate(\
-                                                  data_two_column, 10, axis = 0)
+                                data_, time_ = downsample_signal(data_, fs_start,\
+                                                10, time_)
+                                fs_start = fs_start/10
                         f = h5py.File(save_path, 'r+')
                         for key in f.keys():
                             if key.startswith('missing'):
                                 if key[8:] == channel:
                                     del f[key]
-                        dset = f.create_dataset(channel, data = data_two_column)
+                        if not time_entered:
+                            dset_t = f.create_dataset('time', data = time_)
+                        dset = f.create_dataset(channel, data = data_)
                         f.close()
                     else:
                         f = h5py.File(save_path, 'r+')
@@ -265,6 +388,65 @@ def Download_Shot_List(shot_numbers, channel_paths, max_cores = 8,\
         p.join()
 
 
+def Download_Shot_List_toksearch(shots, channels, savepath, d_sample = 1,\
+                                 verbose = False): 
+    # Initialize the toksearch pipeline
+    pipe = ts.Pipeline(shots)
+
+    # Fetch signals for these 32 channels
+    for channel in channels:
+        try:
+            pipe.fetch(channel[1:-1], ts.PtDataSignal(channel[1:-1]))
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+    # Function to process and write to HDF5
+    @pipe.map
+    def process_and_save(rec):
+        # Get the shot ID from the record
+        shot_id = rec['shot']
+        if np.random.uniform() < 1/100:
+            print(f"Working on shot {shot_id}. This job runs from {shots[0]}-{shots[len(shots)-1]}.")
+        hdf5_path = savepath+f'/{shot_id}.hdf5'
+        for channel in channels:
+            with h5py.File(hdf5_path, 'a') as f:  # 'a' for append mode
+                if channel not in f:
+                    try:
+                        data = rec[channel[1:-1]]['data']
+                        time = rec[channel[1:-1]]['times']
+                        fs_start = 1/(time[1]-time[0])
+                        n = int(math.log10(d_sample))
+                        for _ in range(n):
+                            data, time = downsample_signal(data, fs_start, 10, time)
+                            fs_start = fs_start/10
+                    except Exception as e:
+                        if verbose:
+                            print(f"An error occurred in channel {channel}, shot {shot_id}: {e}")
+
+                    # Save channel-specific data
+                    if rec[channel[1:-1]] is None:
+                        f.create_dataset('missing_'+channel, data = np.array([-1.0]))
+                    else:
+                        f.create_dataset(channel, data=data)
+                        # Save single time series database
+                        if 'time' not in f:
+                            f.create_dataset('time', data=time)
+                else:
+                    if verbose:
+                        print('Channel {}, shot {} '.format(channel[-5:-1],\
+                            int(shot_id)),'has already been downloaded.')
+
+                f.flush()
+    
+    # Discard data from pipeline
+    pipe.keep([])
+
+    # Fetch data, limiting to 10GB per shot as per collaborator's advice
+    #results = list(pipe.compute_serial())
+    #results = list(pipe.compute_spark())
+    pipe.compute_ray(memory_per_shot=int(1.1*(10e9)))
+
+
 def Count_Missing(shot_list, shot_path, missing_path):
     """
     Accepts a shot list and a path to the shot files and produces an up-to-date
@@ -316,12 +498,13 @@ def Count_Missing(shot_list, shot_path, missing_path):
 ## ECEI Class
 ###############################################################################
 class ECEI:
-    def __init__(self):
+    def __init__(self, server = 'atlas.gat.com'):
         """
         Initialize ECEI object by creating an internal list of channel keys.
 
         Args:
         """
+        self.server = server
         self.ecei_channels = []
         for i in range(20):
             for j in range(8):
@@ -422,8 +605,9 @@ class ECEI:
                       "the designated save path which have all channel signals"\
                       " missing. Type 'yes' to continue, anything else to "\
                       "cancel.\n")
-        report = open(missing_path+'/AllChannelsMissing.txt', mode = 'w',\
+        report = open(missing_path+'/AllChannelsMissing_removed.txt', mode = 'a',\
                   encoding='utf-8')
+        removed = 0
         if check == 'yes':
             for filename in os.listdir(save_path):
                 if filename.endswith('hdf5'):
@@ -437,6 +621,10 @@ class ECEI:
                         f.close()
                         if os.path.getsize(shot) <= 342289:
                             report.write(filename[:-5]+"\n")
+                            removed += 1
+                            if np.random.uniform() < 1/100:
+                                print("removed "+filename)
+                                print(str(removed)+" files removed so far this session.")
                             os.remove(shot)
                     else:
                         f.close()
@@ -521,11 +709,12 @@ class ECEI:
                 f = h5py.File(data_path+'/'+filename, 'r')
                 miss_count = 0
                 for key in f.keys():
-                    if key[-9:] not in missing_by_chan:
-                        missing_by_chan[key[-9:]] = 0
-                    if key.startswith('missing'):
-                        miss_count += 1
-                        missing_by_chan[key[-9:]] += 1
+                    if key != 'time':
+                        if key[-9:] not in missing_by_chan:
+                            missing_by_chan[key[-9:]] = 0
+                        if key.startswith('missing'):
+                            miss_count += 1
+                            missing_by_chan[key[-9:]] += 1
                 if miss_count == 160:
                     all_missing += 1
                     for key in f.keys():
@@ -560,8 +749,8 @@ class ECEI:
         # Write report
         report = open(output_path+'/missing_signal_report_'+todays_date+'.txt',\
                       'w')
-        report.write('This missing shot report was generated using the \
-                     contents of '+output_path+' on '+todays_date+'.\n\n')
+        report.write('This missing shot report was generated using the '+\
+                     'contents of '+output_path+' on '+todays_date+'.\n\n')
         report.write('Number of shots with NO channels missing: {}\n'.format(\
                      int(none_missing)))
         report.write('Number of shots with ALL channels missing: {}\n'.format(\
@@ -605,6 +794,144 @@ class ECEI:
                    some_missing_list, fmt='%i')
         np.savetxt(output_path+'/no_channels_missing_list.txt', full_shot_list,\
                    fmt='%i')
+
+
+    def Generate_Missing_Report_Parallel(self, todays_date,\
+            data_path = os.getcwd(), output_path = os.getcwd()):
+        """
+        Creates a report of missing data in a more readable format.
+
+        Args:
+            todays_date: str, todays date in a readable, filename-friendly
+                         format, like "MM-DD-YYYY"
+            data_path: str, path where data files are stored
+            output_path: str, path where the report will go
+        """
+        def reduce_results(results):
+            # Reduce/combine results from all processed files
+            combined = {
+                'none_missing': 0,
+                'all_missing': 0,
+                'one_missing': 0,
+                'eight_missing': 0,
+                'sixteen_missing': 0,
+                'one_to_sixteen_missing': 0,
+                'sixteen_to_all_missing': 0,
+                'missing_by_chan': {},
+                'all_missing_list': [],
+                'some_missing_list': [],
+                'full_shot_list': []
+            }
+
+            for result in results:
+                miss_count = result['miss_count']
+                if miss_count == 160:
+                    combined['all_missing'] += 1
+                    combined['all_missing_list'].append(result['filename'][:-5])
+                elif miss_count == 0:
+                    combined['none_missing'] += 1
+                    combined['full_shot_list'].append(result['filename'][:-5])
+                elif 1 < miss_count < 16:
+                    combined['one_to_sixteen_missing'] += 1
+                    combined['some_missing_list'].append(result['filename'][:-5])
+                elif 16 < miss_count < 160:
+                    combined['sixteen_to_all_missing'] += 1
+                    combined['some_missing_list'].append(result['filename'][:-5])
+                elif miss_count == 1:
+                    combined['one_missing'] += 1
+                    combined['some_missing_list'].append(result['filename'][:-5])
+                elif miss_count == 8:
+                    combined['eight_missing'] += 1
+                    combined['some_missing_list'].append(result['filename'][:-5])
+                elif miss_count == 16:
+                    combined['sixteen_missing'] += 1
+                    combined['some_missing_list'].append(result['filename'][:-5])
+
+                if 'read failure' in result['missing_by_chan']:
+                    print(result['filename']+" had a read error.")
+                elif miss_count < 160:
+                    for chan, is_missing in result['missing_by_chan'].items():
+                        if chan not in combined['missing_by_chan']:
+                            combined['missing_by_chan'][chan] = 0
+                        if is_missing:
+                            combined['missing_by_chan'][chan] += 1
+
+            return combined
+
+        file_list = [f for f in os.listdir(data_path) if f.endswith('.hdf5')]
+        num_shots = len(file_list)
+        print("Generating concise report for the {} shots in "\
+              .format(int(num_shots))+data_path)
+        t_b = time.time()
+
+        print(f"Running on {os.cpu_count()} processes.")
+        with ProcessPoolExecutor() as executor:
+            # Process all files in parallel and collect results
+            try:
+                # Process a subset of files for debugging purposes
+                results = list(executor.map(process_file, file_list, [data_path] * num_shots))
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+        # Combine results outside of the parallel block
+        print("Collating Results...")
+        combined = reduce_results(results)
+
+        # Now combined_results contains all the counts and lists you need
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Finished collecting info in {} seconds.".format(T))
+
+        # Write report
+        report = open(output_path+'/missing_signal_report_'+todays_date+'.txt',\
+                      'w')
+        report.write('This missing shot report was generated using the '+\
+                     'contents of '+output_path+' on '+todays_date+'.\n\n')
+        report.write('Number of shots with NO channels missing: {}\n'.format(\
+                     int(combined['none_missing'])))
+        report.write('Number of shots with ALL channels missing: {}\n'.format(\
+                     int(combined['all_missing'])))
+        report.write('Number of shots with just one channel missing: {}\n'\
+                     .format(int(combined['one_missing'])))
+        report.write('Number of shots with 8 channels missing: {}\n'.format(\
+                     int(combined['eight_missing'])))
+        report.write('Number of shots with 16 channels missing: {}\n'.format(\
+                     int(combined['sixteen_missing'])))
+        report.write('Number of shots with 2 to 15 channels missing: {}\n'\
+                     .format(int(combined['one_to_sixteen_missing'])))
+        report.write('Number of shots with 17 to 159 channels missing: {}\n\n'\
+                     .format(int(combined['sixteen_to_all_missing'])))
+        report.write('Missing signal distribution by channel in shots with '+\
+                     'fewer than 160 channels missing:\n')
+        missing_chan_tot = 0
+        most_miss = 0
+        for key in combined['missing_by_chan']:
+            missing_chan_tot += combined['missing_by_chan'][key]
+            if combined['missing_by_chan'][key] > most_miss:
+                most_miss = combined['missing_by_chan'][key]
+
+        for i in range(20):
+            for j in range(8):
+                key = '"LFS{:02d}{:02d}"'.format(i+3, j+1)
+                bar_length = int(combined['missing_by_chan'][key]/most_miss*50)
+                bar = '█'*bar_length
+                report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
+                        str(int(combined['missing_by_chan'][key]))+' | '+bar+'\n')
+
+        report.close()
+
+        all_missing_list = np.sort(combined['all_missing_list']).astype(int)
+        some_missing_list = np.sort(combined['some_missing_list']).astype(int)
+        full_shot_list = np.sort(combined['full_shot_list']).astype(int)
+
+        np.savetxt(output_path+'/all_channels_missing_list.txt',\
+                   all_missing_list, fmt='%i')
+        np.savetxt(output_path+'/some_channels_missing_list.txt',\
+                   some_missing_list, fmt='%i')
+        np.savetxt(output_path+'/no_channels_missing_list.txt', full_shot_list,\
+                   fmt='%i')
+
 
 
     def Generate_Quality_Report(self, todays_date, data_path, disrupt_list,\
@@ -760,6 +1087,140 @@ class ECEI:
         report.close()
 
 
+    def Generate_Quality_Report_Parallel(self, todays_date, disrupt_list,\
+            shot_list, data_path = os.getcwd(), output_path = os.getcwd()):
+        """
+        Creates a report of missing data in a more readable format.
+
+        Args:
+            todays_date: str, todays date in a readable, filename-friendly
+                         format, like "MM-DD-YYYY"
+            data_path: str, path where data files are stored
+            output_path: str, path where the report will go
+        """
+        def reduce_results(results):
+            # Reduce/combine results from all processed files
+            combined = {
+                'low_sig_by_chan': {},
+                'low_sig_list': [],
+                'NaN_by_chan': {},
+                'NaN_list': [],
+                't_disrupt_list': []
+            }
+
+            for result in results:
+                shot_no = int(result['filename'][:-5])
+                if 'read failure' in result['NaN_by_chan']:
+                    print(result['filename']+" had a read error.")
+                else:
+                    for chan, NaN in result['NaN_by_chan'].items():
+                        if chan not in combined['NaN_by_chan']:
+                            combined['NaN_by_chan'][chan] = 0
+                        if NaN:
+                            combined['NaN_by_chan'][chan] += 1
+                            if shot_no not in combined['NaN_list']:
+                                combined['NaN_list'].append(shot_no)
+                    for chan, sig in result['low_sig_by_chan'].items():
+                        if chan not in combined['low_sig_by_chan']:
+                            combined['low_sig_by_chan'][chan] = 0
+                        if sig:
+                            combined['low_sig_by_chan'][chan] += 1
+                            if shot_no not in combined['low_sig_list']:
+                                combined['low_sig_list'].append(shot_no)
+                    if result['before_t_disrupt']:
+                        combined['t_disrupt_list'].append(shot_no)
+
+            return combined
+
+        #file_list = [f for f in os.listdir(data_path) if f.endswith('.hdf5')]
+        num_shots = len(shot_list)
+        print("Generating data quality report for the {} shots in "\
+              .format(int(num_shots))+data_path)
+        t_b = time.time()
+
+        print(f"Running on {os.cpu_count()} processes.")
+        with ProcessPoolExecutor() as executor:
+            # Process all files in parallel and collect results
+            try:
+                # Process a subset of files for debugging purposes
+                results = list(executor.map(process_file_quality, shot_list, [data_path]*num_shots,\
+                        [disrupt_list]*num_shots))
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+        # Combine results outside of the parallel block
+        print("Collating Results...")
+        combined = reduce_results(results)
+
+        # Now combined_results contains all the counts and lists you need
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Finished collecting info in {} seconds.".format(T))
+
+        # Write report
+        report = open(output_path+'/data_quality_report_'+todays_date+'.txt',\
+                      'w')
+        report.write('This data quality report was generated using the '+\
+                     'contents of '+output_path+'\non '+todays_date+'.\n\n')
+
+        report.write('Number of shots with NaNs present: {}\n'.format(\
+                     int(len(combined['NaN_list']))))
+        report.write('Number of shots with a std. dev. less than 1 mV: {}\n'.format(\
+                     int(len(combined['low_sig_list']))))
+        report.write('Number of disruptive shots that end before t_disrupt: {}\n'.format(\
+                     int(len(combined['t_disrupt_list']))))
+        report.write('_'*80)
+        report.write('\n\n')
+        report.write('Distribution by channel of NaN presence in shots with '+\
+                     'NaNs present:\n')
+        most_NaNs = 0
+        for key in combined['NaN_by_chan']:
+            if combined['NaN_by_chan'][key] > most_NaNs:
+                most_NaNs = combined['NaN_by_chan'][key]
+        if most_NaNs == 0:
+            most_NaNs = 1
+
+        for i in range(20):
+            for j in range(8):
+                key = '"LFS{:02d}{:02d}"'.format(i+3, j+1)
+                bar_length = int(combined['NaN_by_chan'][key]/most_NaNs*50)
+                bar = '█'*bar_length
+                report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
+                        str(int(combined['NaN_by_chan'][key]))+' | '+bar+'\n')
+        report.write('_'*80)
+        report.write('\n\n')
+        report.write('Distribution by channel of low std. dev. in shots with '+\
+                     'channels with a std. dev. smaller than 1 mV:\n')
+        most_lowsig = 0
+        for key in combined['low_sig_by_chan']:
+            if combined['low_sig_by_chan'][key] > most_lowsig:
+                most_lowsig = combined['low_sig_by_chan'][key]
+        if most_lowsig == 0:
+            most_lowsig = 1
+
+        for i in range(20):
+            for j in range(8):
+                key = '"LFS{:02d}{:02d}"'.format(i+3, j+1)
+                bar_length = int(combined['low_sig_by_chan'][key]/most_lowsig*50)
+                bar = '█'*bar_length
+                report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
+                        str(int(combined['low_sig_by_chan'][key]))+' | '+bar+'\n')
+
+        report.close()
+
+        NaN_list = np.sort(combined['NaN_list']).astype(int)
+        low_sig_list = np.sort(combined['low_sig_list']).astype(int)
+        t_disrupt_list = np.sort(combined['t_disrupt_list']).astype(int)
+
+        np.savetxt(output_path+'/contains_NaN.txt',\
+                   NaN_list, fmt='%i')
+        np.savetxt(output_path+'/low_std_dev.txt',\
+                   low_sig_list, fmt='%i')
+        np.savetxt(output_path+'/ends_before_t_disrupt.txt', t_disrupt_list,\
+                   fmt='%i')
+
+
     ###########################################################################
     ## Visualization
     ###########################################################################
@@ -862,10 +1323,10 @@ class ECEI:
     ###########################################################################
     def Acquire_Shots_D3D(self, shot_numbers, save_path = os.getcwd(),\
                           max_cores = 8, verbose = False, chan_lowlim = 3,\
-                          chan_uplim = 22, d_sample = 1, try_again = False):
+                          chan_uplim = 22, d_sample = 1, try_again = False,\
+                          tksrch = False):
         """
-        Accepts a list of shot numbers and downloads the data, saving them into
-        folders corresponding to the individual channels. Returns nothing. 
+        Accepts a list of shot numbers and downloads the data. Returns nothing.
         Shots are saved in hdf5 format, downsampling is done BEFORE saving. 
         Each channel is labelled within its own dataset in the hdf5 file, where 
         the label is the channel name/MDS point name, e.g. '"LFSXXYY"'. If data
@@ -884,29 +1345,39 @@ class ECEI:
                        found to be missing in a prior run.
         """
         t_b = time.time()
-        # Construct channel save paths and create them if needed.
+        # Construct channel save paths.
         channel_paths = []
+        channels = []
         for i in range(len(self.ecei_channels)):
             XX = int(self.ecei_channels[i][-5:-3])
             if XX >= chan_lowlim and XX <= chan_uplim:
                 channel_path = os.path.join(save_path, self.ecei_channels[i])
                 channel_paths.append(channel_path)
+                channels.append(self.ecei_channels[i])
         #Missing shots directory
         missing_path = os.path.join(save_path, 'missing_shot_info')
         if not os.path.exists(missing_path):
             os.mkdir(missing_path)
 
-        try:
-            c = MDS.Connection('atlas.gat.com')
-        except Exception as e:
-            print(e)
-            return False
+        if tksrch:
+            os.environ["MKL_NUM_THREADS"] = "1"
+            os.environ["NUMEXPR_NUM_THREADS"] = "1"
+            os.environ["OMP_NUM_THREADS"] = "1"
+            Download_Shot_List_toksearch(shot_numbers, channels, save_path,\
+                    d_sample = d_sample, verbose = verbose)
+        else:
+            try:
+                print("Connecting to MDSplus...")
+                c = MDS.Connection(self.server)
+            except Exception as e:
+                print(e)
+                return False
 
-        Download_Shot_List(shot_numbers, channel_paths, max_cores = max_cores,\
-                           server = 'atlas.gat.com', verbose = verbose,\
+            Download_Shot_List(shot_numbers, channel_paths, max_cores = max_cores,\
+                           server = self.server, verbose = verbose,\
                            d_sample = d_sample, try_again = try_again)
 
-        missed = Count_Missing(shot_numbers, save_path, missing_path)
+        #missed = Count_Missing(shot_numbers, save_path, missing_path)
 
         t_e = time.time()
         T = t_e-t_b
