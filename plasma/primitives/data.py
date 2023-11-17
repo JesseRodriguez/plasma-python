@@ -498,15 +498,8 @@ class Signal2D(Signal):
                            [omit]'.format(self.description, shot.number))
                     return None, False
 
-                no_time_series = True
-                idx = 0
-                while no_time_series:
-                    chan = E.ecei_channels[idx]
-                    if chan not in missing:
-                        data = (np.asarray(f.get(chan))[:,0])/1000 #units of raw data are ms
-                        data = data.reshape((data.shape[0],1))
-                        no_time_series = False
-                    idx += 1
+                data = (np.asarray(f.get('time'))[:,0])/1000 #units of raw data are ms
+                data = data.reshape((data.shape[0],1))
 
                 for channel in E.ecei_channels:
                     if channel in missing:
