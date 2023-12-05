@@ -12,7 +12,7 @@ from tensorflow.keras.layers import (
     Reshape, Flatten, Permute,  # RepeatVector
     LSTM, SimpleRNN, BatchNormalization,
     Convolution1D, MaxPooling1D, TimeDistributed,
-    Concatenate
+    Concatenate, Conv2D
     )
 # from tensorflow.compat.v1.keras.layers import CuDNNLSTM
 from tensorflow.keras.callbacks import Callback
@@ -419,7 +419,7 @@ class ModelBuilder(object):
             kernel_regularizer=l2(model_conf['dense_regularization']),\
             bias_regularizer=l2(model_conf['dense_regularization']),\
             activity_regularizer=l2(model_conf['dense_regularization']))(pre_rnn_1D)
-        if use_batch_norm:
+        if model_conf['use_batch_norm']:
             pre_rnn_1D = BatchNormalization()(pre_rnn_1D)
         pre_rnn_1D = Activation('relu')(pre_rnn_1D)
         pre_rnn_1D = Dense(model_conf['dense_size']//4,\
@@ -433,16 +433,65 @@ class ModelBuilder(object):
     return pre_rnn_1D
 
 
-    def pre_rnn_2D_ecei(self, model_conf, num_signals, indices_0d, indices_1d,\
-            indices_2d, num_1D, num_2D, pre_rnn_input):
+    def pre_rnn_2D_ecei(self, model_conf, indices_0d, indices_1d, indices_2d,\
+            num_2D, pre_rnn_input):
         """
-        Returns the 1D-specific pre-rnn layers for the model when 1D signals
-        are included in addition to the 0D layers
+        Returns the 2D-specific pre-rnn layers for the model when 2D ECEI signals
+        are included in addition to the 0D layers. Both LFS and HFS data can be
+        used simultaneously.
         """
+        n_filters = model_conf['num_conv_filters']
         pre_rnn_2D = Lambda(lambda x: x[:, len(indices_0d)+len(indices_1d):],
                             output_shape=(len(indices_2d),))(pre_rnn_input)
+        pre_rnn_2D = Reshape((20, 8, num_2D))(pre_rnn_2D)
 
+        # LAYER 1
+        pre_rnn_2D = Conv2D(filters = n_filters, kernel_size=(4,4),\
+                padding = 'same')(pre_rnn_2D) #Out shape: (20,8,n_filters)
+        pre_rnn_2D = Conv2D(filters = n_filters//4, kernel_size=(1,1),\
+                padding = 'valid')(pre_rnn_2D) #Out shape: (20,8,n_filters//4)
+        if model_conf['use_batch_norm']:
+            pre_rnn_2D = BatchNormalization()(pre_rnn_2D)
+        pre_rnn_2D = Activation('relu')(pre_rnn_2D)
 
+        # LAYER 2
+        pre_rnn_2D = Conv2D(filters = n_filters, kernel_size=(4,4),\
+                padding = 'valid')(pre_rnn_2D) #Out shape: (17,5,n_filters)
+        pre_rnn_2D = Conv2D(filters = n_filters//4, kernel_size=(1,1),\
+                padding = 'valid')(pre_rnn_2D) #Out shape: (17,5,n_filters//4)
+        if model_conf['use_batch_norm']:
+            pre_rnn_2D = BatchNormalization()(pre_rnn_2D)
+        pre_rnn_2D = Activation('relu')(pre_rnn_2D)
+
+        # LAYER 3
+        pre_rnn_2D = Conv2D(filters = n_filters, kernel_size=(3,3),\
+                padding = 'valid')(pre_rnn_2D) #Out shape: (15,3,n_filters)
+        pre_rnn_2D = Conv2D(filters = n_filters//4, kernel_size=(1,1),\
+                padding = 'valid')(pre_rnn_2D) #Out shape: (15,3,n_filters//4)
+        if model_conf['use_batch_norm']:
+            pre_rnn_2D = BatchNormalization()(pre_rnn_2D)
+        pre_rnn_2D = Activation('relu')(pre_rnn_2D)
+
+        # LAYER 4
+        pre_rnn_2D = Conv2D(filters = n_filters, kernel_size=(3,3),\
+                padding = 'valid')(pre_rnn_2D) #Out shape: (13,1,n_filters)
+        pre_rnn_2D = Conv2D(filters = n_filters//4, kernel_size=(1,1),\
+                padding = 'valid')(pre_rnn_2D) #Out shape: (13,1,n_filters//4)
+        if model_conf['use_batch_norm']:
+            pre_rnn_2D = BatchNormalization()(pre_rnn_2D)
+        pre_rnn_2D = Activation('relu')(pre_rnn_2D)
+
+        # Flatten then Dense to mirror 1D layers
+        pre_rnn_2D = Flatten()(pre_rnn_2D)
+        pre_rnn_2D = Dense(model_conf['dense_size']//4,\
+                kernel_regularizer=l2(model_conf['dense_regularization']),\
+                bias_regularizer=l2(model_conf['dense_regularization']),\
+                activity_regularizer=l2(model_conf['dense_regularization']))(pre_rnn_2D)
+        if use_batch_norm:
+            pre_rnn_1D = BatchNormalization()(pre_rnn_2D)
+        pre_rnn_2D = Activation('relu')(pre_rnn_2D)
+
+        return pre_rnn_2D
 
 
     def build_train_test_models(self):
