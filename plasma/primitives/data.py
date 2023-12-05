@@ -61,9 +61,7 @@ class Signal(object):
         self.machines = machines
         if causal_shifts is None:
             causal_shifts = [0 for m in machines]
-        self.causal_shifts = causal_shifts  # causal shift in ms -> NOTE(JAR): 
-                                            # the causal shifts appear to be supplied 
-                                            # in s in signals.py, NOT ms
+        self.causal_shifts = causal_shifts  # causal shift in ms 
         self.is_ip = is_ip
         self.num_channels = 1
         self.normalize = normalize

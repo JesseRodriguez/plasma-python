@@ -78,7 +78,8 @@ class ModelBuilder(object):
         num_1D = 0
         curr_idx = 0
         # do we have any 1D indices?
-        is_1D_region = use_signals[0].num_channels > 1
+        is_1D_region = (use_signals[0].num_channels > 1) and\
+                        (use_signals[0].num_channels < 160)
         for sig in use_signals:
             num_channels = sig.num_channels
             indices = range(curr_idx, curr_idx+num_channels)
@@ -96,6 +97,52 @@ class ModelBuilder(object):
             curr_idx += num_channels
         return (np.array(indices_0d).astype(np.int32),
                 np.array(indices_1d).astype(np.int32), num_0D, num_1D)
+
+
+    def get_0D_1D_2D_indices(self):
+        """
+        Supplies the indices corresponding to 0D, 1D, and 2D signals as well as
+        the number of each type of signal as categorized by dimensionality.
+        """
+        # make sure all 1D indices are contiguous in the end!
+        use_signals = self.conf['paths']['use_signals']
+        indices_0d = []
+        indices_1d = []
+        indices_2d = []
+        num_0D = 0
+        num_1D = 0
+        num_2D = 0
+        curr_idx = 0
+        # do we have any 1D indices?
+        is_1D_region = (use_signals[0].num_channels > 1) and\
+                        (use_signals[0].num_channels < 160)
+        is_2D_region = use_signals[0].num_channels >= 160
+        for sig in use_signals:
+            num_channels = sig.num_channels
+            indices = range(curr_idx, curr_idx+num_channels)
+            # NOTE(JAR): Once again I'll emphasize the hackiness of using 1 and
+            # 160 as arbitrary num_channels values to indicate the location of
+            # the 1D and 2D data.
+            if num_channels > 1 and num_channels < 160:
+                indices_1d += indices
+                num_1D += 1
+                is_1D_region = True
+            elif num_channels >= 160:
+                indices_2d += indices
+                num_2D += 1
+                is_2D_region = True
+            else:
+                assert (not is_1D_region and not is_2D_region), (
+                    "Check that use_signals are ordered with 1D and 2D signals last!")
+                assert num_channels == 1
+                indices_0d += indices
+                num_0D += 1
+                is_1D_region = False
+                is_2D_region = False
+            curr_idx += num_channels
+        return (np.array(indices_0d).astype(np.int32),
+                np.array(indices_1d).astype(np.int32),
+                np.array(indices_2d).astype(np.int32), num_0D, num_1D, num_2D)
 
     def build_model(self, predict, custom_batch_size=None):
         conf = self.conf
@@ -147,132 +194,68 @@ class ModelBuilder(object):
         batch_input_shape = (batch_size, length, num_signals)
         # batch_shape_non_temporal = (batch_size, num_signals)
 
-        indices_0d, indices_1d, num_0D, num_1D = self.get_0D_1D_indices()
+        indices_0d, indices_1d, indices_2d, num_0D, num_1D, num_2D =\
+                self.get_0D_1D_2D_indices()
 
-        def slicer(x, indices):
-            return x[:, indices]
+        # NOTE(JAR): Only call to these functions is commented out, so I
+        # commented them out here to allow for the pre_rnn stuff to be moved
+        # to other function(s)
+        #def slicer(x, indices):
+        #    return x[:, indices]
 
-        def slicer_output_shape(input_shape, indices):
-            shape_curr = list(input_shape)
-            assert len(shape_curr) == 2  # only valid for 3D tensors
-            shape_curr[-1] = len(indices)
-            return tuple(shape_curr)
+        #def slicer_output_shape(input_shape, indices):
+        #    shape_curr = list(input_shape)
+        #    assert len(shape_curr) == 2  # only valid for 3D tensors
+        #    shape_curr[-1] = len(indices)
+        #    return tuple(shape_curr)
 
-        pre_rnn_input = Input(shape=(num_signals,))
+        pre_rnn_input = Input(shape = (num_signals,))
+
+        if num_0D > 0:
+            pre_rnn_0D = Lambda(lambda x: x[:,:len(indices_0d)],\
+                    output_shape = (len(indices_0d),))(pre_rnn_input)
 
         if num_1D > 0:
-            pre_rnn_1D = Lambda(lambda x: x[:, len(indices_0d):],
-                                output_shape=(len(indices_1d),))(pre_rnn_input)
-            pre_rnn_0D = Lambda(lambda x: x[:, :len(indices_0d)],
-                                output_shape=(len(indices_0d),))(pre_rnn_input)
-            # slicer(x,indices_0d),lambda s:
-            # slicer_output_shape(s,indices_0d))(pre_rnn_input)
-            pre_rnn_1D = Reshape((num_1D, len(indices_1d)//num_1D))(pre_rnn_1D)
-            pre_rnn_1D = Permute((2, 1))(pre_rnn_1D)
-            if ('simple_conv' in model_conf.keys()
-                    and model_conf['simple_conv'] is True):
-                for i in range(model_conf['num_conv_layers']):
-                    pre_rnn_1D = Convolution1D(
-                        num_conv_filters, size_conv_filters,
-                        padding='valid', activation='relu')(pre_rnn_1D)
-                pre_rnn_1D = MaxPooling1D(pool_size)(pre_rnn_1D)
-            else:
-                for i in range(model_conf['num_conv_layers']):
-                    div_fac = 2**i
-                    '''The first conv layer learns `num_conv_filters//div_fac`
-                    filters (aka kernels), each of size
-                    `(size_conv_filters, num1D)`. Its output will have shape
-                    (None, len(indices_1d)//num_1D - size_conv_filters + 1,
-                    num_conv_filters//div_fac), i.e., for
-                    each position in the input spatial series (direction along
-                    radius), the activation of each filter at that position.
+            pre_rnn_1D = self.pre_rnn_1D(model_conf, indices_0d,\
+                    indices_1d, num_1D, pre_rnn_input)
 
-                    '''
+        if num_2D > 0:
+            pre_rnn_2D = self.pre_rnn_2D(model_conf, indices_1d,\
+                    indices_2d, num_1D, num_2D, pre_rnn_input)
 
-                    '''For i=1 first conv layer would get:
-                    (None, (len(indices_1d)//num_1D - size_conv_filters
-                    + 1)/pool_size-size_conv_filters + 1,
-                    num_conv_filters//div_fac)
-
-                    '''
-                    pre_rnn_1D = Convolution1D(
-                        num_conv_filters//div_fac, size_conv_filters,
-                        padding='valid')(pre_rnn_1D)
-                    if use_batch_norm:
-                        pre_rnn_1D = BatchNormalization()(pre_rnn_1D)
-                        pre_rnn_1D = Activation('relu')(pre_rnn_1D)
-
-                    '''The output of the second conv layer will have shape
-                    (None, len(indices_1d)//num_1D - size_conv_filters + 1,
-                    num_conv_filters//div_fac),
-                    i.e., for each position in the input spatial series
-                    (direction along radius), the activation of each filter
-                    at that position.
-
-                    For i=1, the second layer would output
-                    (None, (len(indices_1d)//num_1D - size_conv_filters + 1)/
-                    pool_size-size_conv_filters + 1,num_conv_filters//div_fac)
-                    '''
-                    pre_rnn_1D = Convolution1D(
-                        num_conv_filters//div_fac, 1, padding='valid')(
-                            pre_rnn_1D)
-                    if use_batch_norm:
-                        pre_rnn_1D = BatchNormalization()(pre_rnn_1D)
-                        pre_rnn_1D = Activation('relu')(pre_rnn_1D)
-                    '''Outputs (None, (len(indices_1d)//num_1D - size_conv_filters
-                    + 1)/pool_size, num_conv_filters//div_fac)
-
-                    For i=1, the pooling layer would output:
-                    (None,((len(indices_1d)//num_1D- size_conv_filters
-                    + 1)/pool_size-size_conv_filters+1)/pool_size,
-                    num_conv_filters//div_fac)
-
-                    '''
-                    pre_rnn_1D = MaxPooling1D(pool_size)(pre_rnn_1D)
-            pre_rnn_1D = Flatten()(pre_rnn_1D)
-            pre_rnn_1D = Dense(
-                dense_size,
-                kernel_regularizer=l2(dense_regularization),
-                bias_regularizer=l2(dense_regularization),
-                activity_regularizer=l2(dense_regularization))(pre_rnn_1D)
-            if use_batch_norm:
-                pre_rnn_1D = BatchNormalization()(pre_rnn_1D)
-            pre_rnn_1D = Activation('relu')(pre_rnn_1D)
-            pre_rnn_1D = Dense(
-                dense_size//4,
-                kernel_regularizer=l2(dense_regularization),
-                bias_regularizer=l2(dense_regularization),
-                activity_regularizer=l2(dense_regularization))(pre_rnn_1D)
-            if use_batch_norm:
-                pre_rnn_1D = BatchNormalization()(pre_rnn_1D)
-            pre_rnn_1D = Activation('relu')(pre_rnn_1D)
-            pre_rnn = Concatenate()([pre_rnn_0D, pre_rnn_1D])
-        else:
+        if num_0D > 0 and num_1D == 0 and num_2D == 0:
             pre_rnn = pre_rnn_input
+        elif num_0D == 0 and num_1D > 0 and num_2D == 0:
+            pre_rnn = pre_rnn_1D
+        elif num_0D == 0 and num_1D == 0 and num_2D > 0:
+            pre_rnn = pre_rnn_2D
+        elif num_0D > 0 and num_1D > 0 and num_2D == 0:
+            pre_rnn = Concatenate()([pre_rnn_0D, pre_rnn_1D])
+        elif num_0D == 0 and num_1D > 0 and num_2D > 0:
+            pre_rnn = Concatenate()([pre_rnn_1D, pre_rnn_2D])
+        elif num_0D > 0 and num_1D == 0 and num_2D > 0:
+            pre_rnn = Concatenate()([pre_rnn_0D, pre_rnn_2D])
+        elif num_0D > 0 and num_1D > 0 and num_2D > 0:
+            pre_rnn = Concatenate()([pre_rnn_0D, pre_rnn_1D, pre_rnn_2D])
 
-        if model_conf['rnn_layers'] == 0 or (
-                'extra_dense_input' in model_conf.keys()
-                and model_conf['extra_dense_input']):
-            pre_rnn = Dense(
-                dense_size,
-                activation='relu',
-                kernel_regularizer=l2(dense_regularization),
-                bias_regularizer=l2(dense_regularization),
-                activity_regularizer=l2(dense_regularization))(pre_rnn)
-            pre_rnn = Dense(
-                dense_size//2,
-                activation='relu',
-                kernel_regularizer=l2(dense_regularization),
-                bias_regularizer=l2(dense_regularization),
-                activity_regularizer=l2(dense_regularization))(pre_rnn)
-            pre_rnn = Dense(
-                dense_size//4,
-                activation='relu',
-                kernel_regularizer=l2(dense_regularization),
-                bias_regularizer=l2(dense_regularization),
-                activity_regularizer=l2(dense_regularization))(pre_rnn)
-
-        pre_rnn_model = tf.keras.Model(inputs=pre_rnn_input, outputs=pre_rnn)
+        if model_conf['rnn_layers'] == 0 or ('extra_dense_input'\
+            in model_conf.keys() and model_conf['extra_dense_input']):
+            pre_rnn = Dense(model_conf['dense_size'], activation='relu',\
+                kernel_regularizer=l2(model_conf['dense_regularization']),\
+                bias_regularizer=l2(model_conf['dense_regularization']),\
+                activity_regularizer=l2(model_conf['dense_regularization']))\
+                (pre_rnn)
+            pre_rnn = Dense(model_conf['dense_size']//2, activation='relu',\
+                kernel_regularizer=l2(model_conf['dense_regularization']),\
+                bias_regularizer=l2(model_conf['dense_regularization']),\
+                activity_regularizer=l2(model_conf['dense_regularization']))\
+                (pre_rnn)
+            pre_rnn = Dense(model_conf['dense_size']//4, activation='relu',\
+                kernel_regularizer=l2(model_conf['dense_regularization']),\
+                bias_regularizer=l2(model_conf['dense_regularization']),\
+                activity_regularizer=l2(model_conf['dense_regularization']))\
+                (pre_rnn)
+        
         # TODO(KGF): uncomment following lines to get summary of pre-RNN model
         # from mpi4py import MPI
         # comm = MPI.COMM_WORLD
@@ -285,11 +268,13 @@ class ModelBuilder(object):
         #     pre_rnn_model.summary()
         #     sys.stdout = ori
         #     fr.close()
+
+        pre_rnn_model = tf.keras.Model(inputs = pre_rnn_input, ouputs = pre_rnn)
+
         if g.task_index == 0:
             pre_rnn_model.summary()
         x_input = Input(batch_shape=batch_input_shape)
-        if (num_1D > 0 or (
-                'extra_dense_input' in model_conf.keys()
+        if (num_1D>0 or num_2D>0 or ('extra_dense_input' in model_conf.keys()\
                 and model_conf['extra_dense_input'])):
             x_in = TimeDistributed(pre_rnn_model)(x_input)
         else:
@@ -354,6 +339,111 @@ class ModelBuilder(object):
         #             tf.global_variables_initializer())
         model.reset_states()
         return model
+
+
+    def pre_rnn_1D(self, model_conf, num_signals, indices_0d, indices_1d,\
+            num_1D, pre_rnn_input):
+        """
+        Returns the 1D-specific pre-rnn layers for the model when 1D signals
+        are included in addition to the 0D layers
+        """
+        pre_rnn_1D = Lambda(lambda x: x[:, len(indices_0d):],
+                            output_shape=(len(indices_1d),))(pre_rnn_input)
+        # slicer(x,indices_0d),lambda s:
+        # slicer_output_shape(s,indices_0d))(pre_rnn_input)
+        pre_rnn_1D = Reshape((num_1D, len(indices_1d)//num_1D))(pre_rnn_1D)
+        pre_rnn_1D = Permute((2, 1))(pre_rnn_1D)
+        if ('simple_conv' in model_conf.keys() and\
+                model_conf['simple_conv'] is True):
+            for i in range(model_conf['num_conv_layers']):
+                pre_rnn_1D = Convolution1D(model_conf['num_conv_filters'],\
+                        model_conf['size_conv_filters'],\
+                        padding='valid', activation='relu')(pre_rnn_1D)
+            pre_rnn_1D = MaxPooling1D(model_conf['pool_size'])(pre_rnn_1D)
+        else:
+            for i in range(model_conf['num_conv_layers']):
+                div_fac = 2**i
+                '''The first conv layer learns `num_conv_filters//div_fac`
+                filters (aka kernels), each of size
+                `(size_conv_filters, num1D)`. Its output will have shape
+                (None, len(indices_1d)//num_1D - size_conv_filters + 1,
+                num_conv_filters//div_fac), i.e., for
+                each position in the input spatial series (direction along
+                radius), the activation of each filter at that position.
+
+                '''
+                
+                '''For i=1 first conv layer would get:
+                (None, (len(indices_1d)//num_1D - size_conv_filters
+                + 1)/pool_size-size_conv_filters + 1,
+                num_conv_filters//div_fac)
+
+                '''
+                pre_rnn_1D = Convolution1D(\
+                        model_conf['num_conv_filters']//div_fac,\
+                        model_conf['size_conv_filters'],padding='valid')\
+                        (pre_rnn_1D)
+                if 'use_batch_norm' in model_conf:
+                    if model_conf['use_batch_norm']:
+                        pre_rnn_1D = BatchNormalization()(pre_rnn_1D)
+                        pre_rnn_1D = Activation('relu')(pre_rnn_1D)
+
+                '''The output of the second conv layer will have shape
+                (None, len(indices_1d)//num_1D - size_conv_filters + 1,
+                num_conv_filters//div_fac),
+                i.e., for each position in the input spatial series
+                (direction along radius), the activation of each filter
+                at that position.
+
+                For i=1, the second layer would output
+                (None, (len(indices_1d)//num_1D - size_conv_filters + 1)/
+                pool_size-size_conv_filters + 1,num_conv_filters//div_fac)
+                '''
+                pre_rnn_1D = Convolution1D(
+                    model_conf['num_conv_filters']//div_fac, 1, padding='valid')(pre_rnn_1D)
+                if use_batch_norm:
+                    pre_rnn_1D = BatchNormalization()(pre_rnn_1D)
+                    pre_rnn_1D = Activation('relu')(pre_rnn_1D)
+                '''Outputs (None, (len(indices_1d)//num_1D - size_conv_filters
+                + 1)/pool_size, num_conv_filters//div_fac)
+
+                For i=1, the pooling layer would output:
+                (None,((len(indices_1d)//num_1D- size_conv_filters
+                + 1)/pool_size-size_conv_filters+1)/pool_size,
+                num_conv_filters//div_fac)
+
+                '''
+                pre_rnn_1D = MaxPooling1D(model_conf['pool_size'])(pre_rnn_1D)
+        pre_rnn_1D = Flatten()(pre_rnn_1D)
+        pre_rnn_1D = Dense(model_conf['dense_size'],\
+            kernel_regularizer=l2(model_conf['dense_regularization']),\
+            bias_regularizer=l2(model_conf['dense_regularization']),\
+            activity_regularizer=l2(model_conf['dense_regularization']))(pre_rnn_1D)
+        if use_batch_norm:
+            pre_rnn_1D = BatchNormalization()(pre_rnn_1D)
+        pre_rnn_1D = Activation('relu')(pre_rnn_1D)
+        pre_rnn_1D = Dense(model_conf['dense_size']//4,\
+                kernel_regularizer=l2(model_conf['dense_regularization']),\
+                bias_regularizer=l2(model_conf['dense_regularization']),\
+                activity_regularizer=l2(model_conf['dense_regularization']))(pre_rnn_1D)
+        if use_batch_norm:
+            pre_rnn_1D = BatchNormalization()(pre_rnn_1D)
+        pre_rnn_1D = Activation('relu')(pre_rnn_1D)
+
+    return pre_rnn_1D
+
+
+    def pre_rnn_2D_ecei(self, model_conf, num_signals, indices_0d, indices_1d,\
+            indices_2d, num_1D, num_2D, pre_rnn_input):
+        """
+        Returns the 1D-specific pre-rnn layers for the model when 1D signals
+        are included in addition to the 0D layers
+        """
+        pre_rnn_2D = Lambda(lambda x: x[:, len(indices_0d)+len(indices_1d):],
+                            output_shape=(len(indices_2d),))(pre_rnn_input)
+
+
+
 
     def build_train_test_models(self):
         return self.build_model(False), self.build_model(True)
