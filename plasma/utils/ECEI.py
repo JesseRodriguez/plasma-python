@@ -498,7 +498,7 @@ def Count_Missing(shot_list, shot_path, missing_path):
 ## ECEI Class
 ###############################################################################
 class ECEI:
-    def __init__(self, server = 'atlas.gat.com'):
+    def __init__(self, server = 'atlas.gat.com', side = 'LFS'):
         """
         Initialize ECEI object by creating an internal list of channel keys.
 
@@ -506,9 +506,10 @@ class ECEI:
         """
         self.server = server
         self.ecei_channels = []
+        self.side = side
         for i in range(20):
             for j in range(8):
-                self.ecei_channels.append('"LFS{:02d}{:02d}"'.format(i+3,j+1))
+                self.ecei_channels.append('"{}{:02d}{:02d}"'.format(side,i+3,j+1))
 
     ###########################################################################
     ## Data Processing
@@ -653,26 +654,38 @@ class ECEI:
             f.close()
 
 
-    def Clean_Missing_Signal_List(self, shots):
+    def Clean_Missing_Signal_List(self, data_path, missing_path, shots):
         """
         Removes shot files in a list if they have all channel signals missing.
         """
-        for s in shots:
-            shot_file = str(s)+".hdf5"
-            shot = os.path.join(os.getcwd(), shot_file)
-            f = h5py.File(shot, 'r')
-            count = 0
-            for key in f.keys():
-                if key.startswith('missing'):
-                    count += 1
-            if count == 160:
-                f.close()
-                check = input("You are about to delete "+shot+". Are "+\
-                              "you sure about that?\n")
-                if check == 'yes':
-                    os.remove(shot)
-            else:
-                f.close()
+        check = input("WARNING: this function will delete ALL signal files in "\
+                      "the designated save path which have all channel signals"\
+                      " missing. Type 'yes' to continue, anything else to "\
+                      "cancel.\n")
+        report = open(missing_path+'/AllChannelsMissing_removed.txt', mode = 'a',\
+                  encoding='utf-8')
+        removed = 0
+        if check == 'yes':
+            for s in shots:
+                shot_file = str(s)+".hdf5"
+                shot = os.path.join(data_path, shot_file)
+                if os.path.exists(shot):
+                    f = h5py.File(shot, 'r')
+                    count = 0
+                    for key in f.keys():
+                        if key.startswith('missing'):
+                            count += 1
+                    if count == 160:
+                        f.close()
+                        if os.path.getsize(shot) <= 342289:
+                            report.write(str(s)+"\n")
+                            removed += 1
+                            if np.random.uniform() < 1/100:
+                                print("removed "+str(s))
+                                print(str(removed)+" files removed so far this session.")
+                            os.remove(shot)
+                    else:
+                        f.close()
 
 
     def Generate_Missing_Report_Concise(self, todays_date,\
@@ -776,7 +789,7 @@ class ECEI:
 
         for i in range(20):
             for j in range(8):
-                key = '"LFS{:02d}{:02d}"'.format(i+3, j+1)
+                key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)
                 bar_length = int(missing_by_chan[key]/most_miss*50)
                 bar = '█'*bar_length
                 report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
@@ -913,7 +926,7 @@ class ECEI:
 
         for i in range(20):
             for j in range(8):
-                key = '"LFS{:02d}{:02d}"'.format(i+3, j+1)
+                key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)
                 bar_length = int(combined['missing_by_chan'][key]/most_miss*50)
                 bar = '█'*bar_length
                 report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
@@ -1183,7 +1196,7 @@ class ECEI:
 
         for i in range(20):
             for j in range(8):
-                key = '"LFS{:02d}{:02d}"'.format(i+3, j+1)
+                key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)
                 bar_length = int(combined['NaN_by_chan'][key]/most_NaNs*50)
                 bar = '█'*bar_length
                 report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
@@ -1201,7 +1214,7 @@ class ECEI:
 
         for i in range(20):
             for j in range(8):
-                key = '"LFS{:02d}{:02d}"'.format(i+3, j+1)
+                key = '"{}{:02d}{:02d}"'.format(self.side, i+3, j+1)
                 bar_length = int(combined['low_sig_by_chan'][key]/most_lowsig*50)
                 bar = '█'*bar_length
                 report.write('Channel {:02d}{:02d}: '.format(i+3, j+1)+\
@@ -1294,7 +1307,7 @@ class ECEI:
         """
         shot_s = str(shot)
         f = h5py.File(save_dir+'/'+shot_s+'.hdf5', 'r')
-        data = np.asarray(f.get('"LFS'+channel+'"'))
+        data = np.asarray(f.get('"'+self.side+channel+'"'))
         np.savetxt(save_dir+'/'+shot_s+'_chan'+channel+'.txt', data)
         f.close()
 

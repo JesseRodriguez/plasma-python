@@ -112,6 +112,7 @@ class ModelBuilder(object):
         num_0D = 0
         num_1D = 0
         num_2D = 0
+        2D_types = []
         curr_idx = 0
         # do we have any 1D indices?
         is_1D_region = (use_signals[0].num_channels > 1) and\
@@ -130,6 +131,8 @@ class ModelBuilder(object):
             elif num_channels >= 160:
                 indices_2d += indices
                 num_2D += 1
+                if sig.is_ecei:
+                    2D_types.append('ecei')
                 is_2D_region = True
             else:
                 assert (not is_1D_region and not is_2D_region), (
@@ -194,7 +197,7 @@ class ModelBuilder(object):
         batch_input_shape = (batch_size, length, num_signals)
         # batch_shape_non_temporal = (batch_size, num_signals)
 
-        indices_0d, indices_1d, indices_2d, num_0D, num_1D, num_2D =\
+        indices_0d, indices_1d, indices_2d, num_0D, num_1D, num_2D, 2D_types =\
                 self.get_0D_1D_2D_indices()
 
         # NOTE(JAR): Only call to these functions is commented out, so I
@@ -220,7 +223,10 @@ class ModelBuilder(object):
                     indices_1d, num_1D, pre_rnn_input)
 
         if num_2D > 0:
-            pre_rnn_2D = self.pre_rnn_2D(model_conf, indices_1d,\
+            for signal_type in 2D_types:
+                if signal_type != 'ecei':
+                    raise RuntimeError("non-ECEI 2D data not yet supported!")
+            pre_rnn_2D = self.pre_rnn_2D_ecei(model_conf, indices_1d,\
                     indices_2d, num_1D, num_2D, pre_rnn_input)
 
         if num_0D > 0 and num_1D == 0 and num_2D == 0:
