@@ -391,10 +391,16 @@ ipdirect = Signal("plasma current direction", ["iptdirect"], [d3d])
 ipdirectt = Signal("plasma current direction tol", ["iptdirect"], [d3d],
                    data_avail_tolerances=[0.029])
 
-ecei = Signal2D("ECEi", ['ECEI_kHz'], [d3d], (20,8),
-                is_ecei = True, miss_chan_threshold = 80)
+ecei = Signal2D("ECEi", ['ECEI_1kHz'], [d3d], (20,8),
+                is_ecei = True, miss_chan_threshold = 40)
 
-eceit = Signal2D("ECEi", ['ECEI_kHz'], [d3d], (20,8),
+eceit = Signal2D("ECEi", ['ECEI_1kHz'], [d3d], (20,8),
+                is_ecei = True, miss_chan_threshold = 159)
+
+ecei_hfs = Signal2D("ECEi", ['ECEI_HFS_1kHz'], [d3d], (20,8),
+                is_ecei = True, miss_chan_threshold = 40)
+
+ecei_hfst = Signal2D("ECEi", ['ECEI_HFS_1kHz'], [d3d], (20,8),
                 is_ecei = True, miss_chan_threshold = 159)
 
 # for downloading, modify this to preprocess shots with only a subset of
@@ -428,7 +434,7 @@ all_signals = {
     # 'q_psi_profile':q_psi_profile}
 
     # KGF(2021-12-15): exclude ecei by default, for now:
-    # 'ecei': ecei,
+    # 'ecei': ecei, 'ecei_hfs': ecei_hfs
 }
 
 all_signals_max_tol = {
@@ -440,7 +446,7 @@ all_signals_max_tol = {
     'ipdirectt': ipdirectt, 'iptargett': iptargett,
     'iperrt': iperrt,
     'etemp_profilet': etemp_profilet, 'edens_profilet': edens_profilet,
-    'ecei': eceit,
+    'ecei': eceit, 'ecei_hfs': ecei_hfst
 }
 
 ecei_test = {
@@ -465,9 +471,8 @@ fully_defined_signals_0D = {
     sig_name: sig for (sig_name, sig) in all_signals_restricted.items() if (
         sig.is_defined_on_machines(all_machines) and sig.num_channels == 1)
 }
-# NOTE(JAR): In the future, if 2D signals other than ECEI are added, of if HFS
-# ECEI data is added, then we will have to add more num_channels checks here
-# to classify.
+# NOTE(JAR): In the future, if 2D signals other than ECEI are added,
+# then we will have to add more num_channels checks here to classify.
 fully_defined_signals_1D = {
     sig_name: sig for (sig_name, sig) in all_signals_restricted.items() if (
         sig.is_defined_on_machines(all_machines) and sig.num_channels > 1 and\
