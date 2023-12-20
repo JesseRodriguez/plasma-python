@@ -9,6 +9,7 @@ Jesse A Rodriguez, 06/28/2021
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 import time
 import sys
 import os
@@ -29,7 +30,7 @@ try:
 except ImportError:
     pass
 
-################################################################################
+###############################################################################
 ## Utility Functions and Globals
 ################################################################################
 def downsample_signal(signal, orig_sample_rate, decimation_factor,\
@@ -69,6 +70,23 @@ def downsample_signal(signal, orig_sample_rate, decimation_factor,\
         time_ds = np.array([])
                                                           
     return downsampled_signal, time_ds
+
+
+def myclip(data, low, high):
+    """
+    Dumb clip for plotting purposes
+    """
+    clipped_data = np.zeros_like(data)
+    for i in range(data.shape[0]):
+        if data[i] > high or data[i] < low:
+            if i == 0:
+                clipped_data[i] = 0
+            else:
+                clipped_data[i] = data[i-1]
+        else:
+            clipped_data[i] = data[i]
+
+    return clipped_data
 
 
 def check_file(hdf5_path, verbose = True):
@@ -1313,7 +1331,7 @@ class ECEI:
     ## Visualization
     ###########################################################################
     def Single_Shot_Plot(self, shot, data_path, save_dir = os.getcwd(),\
-                         show = False):
+                         show = False, d_sample = 10):
         """
         Plot voltage traces for a single shot, saves plot as a .pdf
 
@@ -1330,19 +1348,33 @@ class ECEI:
         ax = gs.subplots(sharex='col')
         count = 0
         plot_no = 0
+        time = f.get('time')
+        fs_start = 1/(time[1]-time[0])
+        n = int(math.log10(d_sample))
         for channel in self.ecei_channels:
             count += 1
             row = plot_no//5
             col = plot_no%5
             if channel in f.keys():
                 data = f.get(channel)
-                ax[row,col].plot(data[:,0], data[:,1],\
+                data_ = np.copy(data)
+                time_ = np.copy(time)
+                for _ in range(n):
+                    data_, time_ = downsample_signal(data_, fs_start, 10, time_)
+                    fs_start = fs_start/10
+                mean = np.mean(data_)
+                std_dev = np.std(data_)
+                threshold = 3
+
+                # Clipping outliers
+                clipped_data = myclip(data_, mean - threshold*std_dev, mean + threshold*std_dev)
+                ax[row,col].plot(time_[:], clipped_data[:],\
                                  label = 'YY = '+channel[-3:-1],\
                                  linewidth = 0.4, alpha = 0.8)
             if count%8 == 0:
                 plot_no += 1
-                XX = count//8 + 2
-                title = 'XX = {:02d}'.format(XX)
+                XX = channel[-5:-3]
+                title = 'XX = {}'.format(XX)
                 ax[row,col].set_title(title, fontsize = 5)
                 #ax[row,col].legend(prop={'size': 2.75})
                 ax[row,col].tick_params(width = 0.3)
@@ -1367,6 +1399,103 @@ class ECEI:
             fig.show()
 
         fig.savefig(save_dir+'/Shot_{}.pdf'.format(int(shot)))
+
+
+    def Convert_to_dT(self, data, time, features = 10**4):
+        """
+        Takes channel data series and converts them to units of dT/T
+
+        Args:
+            data: Channel data series
+            time: time series
+            features: value that defines the frequency range in which we are
+                      looking for features
+        """
+        time_s = time*10**(-3)
+        dt = time_s[1]-time_s[0]
+        t_features = 1/features
+        t_avg = t_features*10**3
+        n_avg = int(t_avg//dt)
+
+        data_avg = np.zeros_like(data)
+        n_bins = int(np.ceil(data.shape[0]/n_avg))
+        for i in range(n_bins):
+            if i == n_bins - 1:
+                avg = np.mean(data[i*n_avg:])
+                data_avg[i*n_avg:] = avg
+            else:
+                avg = np.mean(data[i*n_avg:(i+1)*n_avg])
+                data_avg[i*n_avg:(i+1)*n_avg] = avg
+
+        return data-data_avg
+
+
+    def Load_2D_Array(self, shot, data_dir, units = 'dT', features = 10**4,\
+            d_sample = 1):
+        """
+        Loads and returns a (num_timesteps, 20, 8) array of the ECEI data
+        """
+        shot_file = data_dir+'/'+str(int(shot))+'.hdf5'
+        f = h5py.File(shot_file, 'r')
+
+        time = np.asarray(f.get('time'))
+        fs_start = 1/(time[1]-time[0])
+        n = int(math.log10(d_sample))
+        array = np.zeros((int(np.ceil(time.shape[0]/d_sample)),20,8))
+        for channel in self.ecei_channels:
+            XX = int(channel[-5:-3])-3
+            YY = int(channel[-3:-1])-1
+            if channel in f.keys():
+                data = np.asarray(f.get(channel))
+                if units == 'dT':
+                    data = self.Convert_to_dT(data, time, features)
+                data_ = np.copy(data)
+                time_ = np.copy(time)
+                for _ in range(n):
+                    data_, time_ = downsample_signal(data_, fs_start, 10, time_)
+                    fs_start = fs_start/10
+                array[:,XX,YY] = data_
+            else:
+                array[:,XX,YY] = np.zeros_like(time[::d_sample])
+
+        return array
+
+
+    def Make_ECEI_Movie(self, shot, data_dir, save_dir = os.getcwd(),\
+            units = 'dT', features = 10**4):
+        """
+        Makes a video of a given ECEI shot.
+        """
+        print('loading array')
+        frames = self.Load_2D_Array(shot, data_dir, features = features,\
+                                    d_sample = 100)
+        print('array loaded')
+        num_frames_tot = frames.shape[0]
+        desired_num_frames = 300
+        slicing_factor = num_frames_tot//desired_num_frames
+
+        image_stack = frames[::slicing_factor,:,:]
+
+        fig, ax = plt.subplots()
+        ax.axis('off')
+
+        im = ax.imshow(image_stack[0], cmap='seismic', interpolation='spline36',\
+                aspect='auto', vmin=np.min(image_stack), vmax=np.max(image_stack))
+
+        def update(frame):
+            im.set_data(image_stack[frame])
+            return [im]
+
+        # Create animation
+        ani = animation.FuncAnimation(fig, update, frames=image_stack.shape[0], blit=True)
+
+        # Save to file
+        shot_file = save_dir+'/'+str(int(shot))+'.mp4'
+        ani.save(shot_file, writer='ffmpeg', fps=30, dpi=300)
+
+        plt.close(fig)  # Close the figure
+
+        return
 
 
     def Generate_Txt(self, shot, channel, save_dir = os.getcwd()):
