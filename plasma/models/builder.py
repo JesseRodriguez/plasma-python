@@ -436,7 +436,7 @@ class ModelBuilder(object):
             pre_rnn_1D = BatchNormalization()(pre_rnn_1D)
         pre_rnn_1D = Activation('relu')(pre_rnn_1D)
 
-    return pre_rnn_1D
+        return pre_rnn_1D
 
 
     def pre_rnn_2D_ecei(self, model_conf, indices_0d, indices_1d, indices_2d,\

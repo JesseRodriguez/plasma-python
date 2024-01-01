@@ -318,7 +318,7 @@ def parameters(input_file):
                 'etemp_profile': sig.etemp_profile,
                 'edens_profile': sig.edens_profile,
             }
-        elif params['paths']['data'] == 'd3d_2019_all_dims':
+        elif params['paths']['data'] == 'd3d_2019_ecei':
             params['paths']['shot_files'] = [d3d_full_2019]
             params['paths']['shot_files_test'] = []
             params['paths']['use_signals_dict'] = {
@@ -339,6 +339,29 @@ def parameters(input_file):
                 'etemp_profile': sig.etemp_profile,
                 'edens_profile': sig.edens_profile,
                 'ecei': sig.ecei,
+            }
+        elif params['paths']['data'] == 'd3d_2019_ecei_hfs':
+            params['paths']['shot_files'] = [d3d_full_2019]
+            params['paths']['shot_files_test'] = []
+            params['paths']['use_signals_dict'] = {
+                'q95': sig.q95,
+                'li': sig.li,
+                'ip': sig.ip,
+                'lm': sig.lm,
+                'betan': sig.betan,
+                'energy': sig.energy,
+                'dens': sig.dens,
+                'pradcore': sig.pradcore,
+                'pradedge': sig.pradedge,
+                'pin': sig.pin,
+                'torquein': sig.torquein,
+                'ipdirect': sig.ipdirect,
+                'iptarget': sig.iptarget,
+                'iperr': sig.iperr,
+                'etemp_profile': sig.etemp_profile,
+                'edens_profile': sig.edens_profile,
+                'ecei': sig.ecei,
+                'ecei_hfs': sig.ecei_hfs,
             }
         elif params['paths']['data'] == 'd3d_1D':
             params['paths']['shot_files'] = [d3d_full]
