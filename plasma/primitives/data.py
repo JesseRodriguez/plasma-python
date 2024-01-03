@@ -479,7 +479,6 @@ class Signal2D(Signal):
 
         if self.is_ecei:
             try:
-                print("start of try block")
                 E = ECEI()
                 f = h5py.File(file_path, 'r')
                 miss_count = 0
