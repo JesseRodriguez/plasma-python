@@ -781,6 +781,34 @@ class ECEI:
                         f.close()
 
 
+    def Remove_List(self, data_path, shots, dbl_check = False):
+        """
+        Removes shot files in a list where the list is a list of int shot numbers.
+        """
+        if dbl_check:
+            check = input("WARNING: this function will delete ALL signal files in "\
+                      "the designated save path which are on the provided"\
+                      " list. Type 'yes' to continue, anything else to "\
+                      "cancel.\n")
+        else:
+            check = 'yes'
+
+        report = open(data_path+'/shots_removed.txt', mode = 'a',\
+                  encoding='utf-8')
+        removed = 0
+        if check == 'yes':
+            for s in shots:
+                shot_file = str(s)+".hdf5"
+                shot = os.path.join(data_path, shot_file)
+                if os.path.exists(shot):
+                    report.write(str(s)+"\n")
+                    removed += 1
+                    if np.random.uniform() < 1/100:
+                        print("removed "+str(s))
+                        print(str(removed)+" files removed so far this session.")
+                    os.remove(shot)
+
+
     def Generate_Missing_Report_Concise(self, todays_date,\
             data_path = os.getcwd(), output_path = os.getcwd()):
         """
@@ -1211,13 +1239,15 @@ class ECEI:
                 'low_sig_list': [],
                 'NaN_by_chan': {},
                 'NaN_list': [],
-                't_disrupt_list': []
+                't_disrupt_list': [],
+                'read_error_list': []
             }
 
             for result in results:
                 shot_no = int(result['filename'][:-5])
                 if 'read failure' in result['NaN_by_chan']:
                     print(result['filename']+" had a read error.")
+                    combined['read_error_list'].append(shot_no)
                 else:
                     for chan, NaN in result['NaN_by_chan'].items():
                         if chan not in combined['NaN_by_chan']:
@@ -1318,12 +1348,15 @@ class ECEI:
         NaN_list = np.sort(combined['NaN_list']).astype(int)
         low_sig_list = np.sort(combined['low_sig_list']).astype(int)
         t_disrupt_list = np.sort(combined['t_disrupt_list']).astype(int)
+        read_error_list = np.sort(combined['read_error_list']).astype(int)
 
         np.savetxt(output_path+'/contains_NaN.txt',\
                    NaN_list, fmt='%i')
         np.savetxt(output_path+'/low_std_dev.txt',\
                    low_sig_list, fmt='%i')
         np.savetxt(output_path+'/ends_before_t_disrupt.txt', t_disrupt_list,\
+                   fmt='%i')
+        np.savetxt(output_path+'/read_error_list.txt', read_error_list,\
                    fmt='%i')
 
 

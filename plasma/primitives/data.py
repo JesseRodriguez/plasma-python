@@ -479,6 +479,7 @@ class Signal2D(Signal):
 
         if self.is_ecei:
             try:
+                print("start of try block")
                 E = ECEI()
                 f = h5py.File(file_path, 'r')
                 miss_count = 0
@@ -496,7 +497,7 @@ class Signal2D(Signal):
                            [omit]'.format(self.description, shot.number))
                     return None, False
 
-                data = (np.asarray(f.get('time'))[:,0])/1000 #units of raw data are ms
+                data = (np.asarray(f.get('time')))/1000 #units of raw data are ms
                 data = data.reshape((data.shape[0],1))
 
                 for channel in E.ecei_channels:
@@ -505,13 +506,12 @@ class Signal2D(Signal):
                         data = np.append(data, chan, axis = 1)
                     else:
                         chan = np.asarray(f.get(channel))
-                        data = np.append(data, chan[:,1].reshape((chan.shape[0],1)),\
+                        data = np.append(data, chan.reshape((chan.shape[0],1)),\
                                      axis = 1)
             except Exception as e:
                 print(e)
                 print('Cannot load signal {} shot {} [omit]'.format(
                       file_path, shot.number))
-                os.remove(file_path)
                 return None, False
             assert data.shape[1] == 161
 
