@@ -521,7 +521,8 @@ class Signal2D(Signal):
                             chan = np.zeros((data.shape[0],1))
                             data = np.append(data, chan, axis = 1)
                             miss_count += 1
-                        data = np.append(data, chan.reshape((data.shape[0],1)),\
+                        else:
+                            data = np.append(data, chan.reshape((data.shape[0],1)),\
                                      axis = 1)
                 if miss_count > self.miss_chan_threshold:
                     if verbose:
