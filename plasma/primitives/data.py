@@ -91,23 +91,26 @@ class Signal(object):
         file_path = self.get_file_path(prepath, shot.machine, shot.number)
         return os.path.isfile(file_path)
 
-    def load_data_from_txt_safe(self, prepath, shot, dtype='float32'):
+    def load_data_from_txt_safe(self, prepath, shot, dtype='float32', verbose = True):
         file_path = self.get_file_path(prepath, shot.machine, shot.number)
         if not self.is_saved(prepath, shot):
-            print('Signal {}, shot {} was never downloaded [omit]'.format(
-                self.description, shot.number))
+            if verbose:
+                print('Signal {}, shot {} was never downloaded [omit]'.format(
+                      self.description, shot.number))
             return None, False
 
         if os.path.getsize(file_path) == 0:
-            print('Signal {}, shot {} '.format(self.description, shot.number),
-                  'was downloaded incorrectly (empty file) [omit]')
+            if verbose:
+                print('Signal {}, shot {} '.format(self.description, shot.number),
+                      'was downloaded incorrectly (empty file) [omit]')
             os.remove(file_path)
             return None, False
         try:
             data = np.loadtxt(file_path, dtype=dtype)
             if np.all(data == get_missing_value_array()):
-                print('Signal {}, shot {} contains no data [omit]'.format(
-                    self.description, shot.number))
+                if verbose:
+                    print('Signal {}, shot {} contains no data [omit]'.format(
+                          self.description, shot.number))
                 return None, False
         except Exception as e:
             print(e)
@@ -118,8 +121,8 @@ class Signal(object):
 
         return data, True
 
-    def load_data(self, prepath, shot, dtype='float32'):
-        data, succ = self.load_data_from_txt_safe(prepath, shot)
+    def load_data(self, prepath, shot, dtype='float32', verbose = True):
+        data, succ = self.load_data_from_txt_safe(prepath, shot, dtype, verbose)
         if not succ:
             return None, None, False
 
@@ -151,14 +154,16 @@ class Signal(object):
             if self.is_ip:
                 print('Shot {} has no current [omit]'.format(shot.number))
             else:
-                print('Signal {}, shot {} contains no data [omit]'.format(
-                    self.description, shot.number))
+                if verbose:
+                    print('Signal {}, shot {} contains no data [omit]'.format(
+                          self.description, shot.number))
             return None, sig.shape, False
 
         # make sure data doesn't contain NaN values
         if np.any(np.isnan(t)) or np.any(np.isnan(sig)):
-            print('Signal {}, shot {} contains NaN [omit]'.format(
-                self.description, shot.number))
+            if verbose:
+                print('Signal {}, shot {} contains NaN [omit]'.format(
+                      self.description, shot.number))
             return None, sig.shape, False
 
         return t, sig, True
@@ -257,8 +262,8 @@ class ProfileSignal(Signal):
         self.mapping_range = mapping_range
         self.num_channels = num_channels
 
-    def load_data(self, prepath, shot, dtype='float32'):
-        data, succ = self.load_data_from_txt_safe(prepath, shot)
+    def load_data(self, prepath, shot, dtype='float32', verbose = True):
+        data, succ = self.load_data_from_txt_safe(prepath, shot, dtype, verbose)
         if not succ:
             return None, None, False
 
@@ -279,12 +284,14 @@ class ProfileSignal(Signal):
                   ' [omit]')
             return None, None, False
         if len(t) <= 1 or (np.max(sig) == 0.0 and np.min(sig) == 0.0):
-            print('Signal {}, shot {} '.format(self.description, shot.number),
-                  'contains no data [omit]')
+            if verbose:
+                print('Signal {}, shot {} '.format(self.description, shot.number),
+                      'contains no data [omit]')
             return None, None, False
         if np.any(np.isnan(t)) or np.any(np.isnan(sig)):
-            print('Signal {}, shot {} '.format(self.description, shot.number),
-                  'contains NaN value(s) [omit]')
+            if verbose:
+                print('Signal {}, shot {} '.format(self.description, shot.number),
+                      'contains NaN value(s) [omit]')
             return None, None, False
 
         timesteps = len(t)
@@ -298,11 +305,12 @@ class ProfileSignal(Signal):
                                      k=1, ext=3)
                 sig_interp[i, :] = f(remapping)
             else:
-                print('Signal {}, shot {} '.format(self.description,
+                if verbose:
+                    print('Signal {}, shot {} '.format(self.description,
                                                    shot.number),
-                      'has insufficient points for linear interpolation. ',
-                      'dfitpack.error: (m>k) failed for hidden m: fpcurf0:m=1 '
-                      '[omit]')
+                          'has insufficient points for linear interpolation. ',
+                          'dfitpack.error: (m>k) failed for hidden m: fpcurf0:m=1 '
+                          '[omit]')
                 return None, None, False
 
         return t, sig_interp, True
@@ -453,7 +461,7 @@ class Signal2D(Signal):
                                             raw_signal=True)
 
 
-    def load_data_from_hdf5_safe(self, prepath, shot):
+    def load_data_from_hdf5_safe(self, prepath, shot, verbose = True):
         """
         Loads 2D data from hdf5 file where each database in the file contains
         data from a single channel. Stacks data into 2D numpy array with shape
@@ -467,13 +475,15 @@ class Signal2D(Signal):
         """
         file_path = self.get_file_path(prepath, shot.machine, shot.number)
         if not self.is_saved(prepath, shot):
-            print('Signal {}, shot {} was never downloaded at {} [omit]'.format(
-                self.description, shot.number, file_path))
+            if verbose:
+                print('Signal {}, shot {} was never downloaded at {} [omit]'.format(
+                      self.description, shot.number, file_path))
             return None, False
 
         if os.path.getsize(file_path) == 0:
-            print('Signal {}, shot {} '.format(self.description, shot.number),
-                  'was downloaded incorrectly (empty file) [omit]')
+            if verbose:
+                print('Signal {}, shot {} '.format(self.description, shot.number),
+                      'was downloaded incorrectly (empty file) [omit]')
             os.remove(file_path)
             return None, False
 
@@ -486,14 +496,16 @@ class Signal2D(Signal):
                 for key in f.keys():
                     if key.startswith('missing'):
                         miss_count += 1
-                        missing.append(key)
+                        missing.append(key[8:])
                 if miss_count == 160:
-                    print('Signal {}, shot {} contains no data [omit]'.format(
-                          self.description, shot.number))
+                    if verbose:
+                        print('Signal {}, shot {} contains no data [omit]'.format(\
+                              self.description, shot.number))
                     return None, False
                 if miss_count > self.miss_chan_threshold:
-                    print('Signal {}, shot {} is missing too many channels \
-                           [omit]'.format(self.description, shot.number))
+                    if verbose:
+                        print('Signal {}, shot {} is missing too many channels [omit]'.format(\
+                              self.description, shot.number))
                     return None, False
 
                 data = (np.asarray(f.get('time')))/1000 #units of raw data are ms
@@ -505,12 +517,24 @@ class Signal2D(Signal):
                         data = np.append(data, chan, axis = 1)
                     else:
                         chan = np.asarray(f.get(channel))
-                        data = np.append(data, chan.reshape((chan.shape[0],1)),\
+                        if chan.shape[0] != data.shape[0]:
+                            chan = np.zeros((data.shape[0],1))
+                            data = np.append(data, chan, axis = 1)
+                            miss_count += 1
+                        data = np.append(data, chan.reshape((data.shape[0],1)),\
                                      axis = 1)
+                if miss_count > self.miss_chan_threshold:
+                    if verbose:
+                        print('Signal {}, shot {} is missing too many channels [omit]'.format(\
+                              self.description, shot.number))
+                    return None, False
+
             except Exception as e:
                 print(e)
                 print('Cannot load signal {} shot {} [omit]'.format(
                       file_path, shot.number))
+                print("There are "+str(len(f.keys()))+" total datasets in the"+\
+                      " hdf5 file.")
                 return None, False
             assert data.shape[1] == 161
 
@@ -548,9 +572,9 @@ class Signal2D(Signal):
 
         return data, True
 
-    def load_data(self, prepath, shot, dtype='float32'):
+    def load_data(self, prepath, shot, dtype='float32', verbose = True):
         if self.is_ecei:
-            data, succ = self.load_data_from_hdf5_safe(prepath, shot)
+            data, succ = self.load_data_from_hdf5_safe(prepath, shot, verbose)
         else:
             data, succ = self.load_data_from_txt_safe(prepath, shot)
 

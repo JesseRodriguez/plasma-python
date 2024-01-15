@@ -13,6 +13,7 @@ import matplotlib.animation as animation
 import time
 import sys
 import os
+import shutil
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
@@ -99,6 +100,95 @@ def check_file(hdf5_path, verbose = True):
         if verbose:
             print(f"File {hdf5_path} does not exist.")
         return False
+
+
+def Fix_None_Channels(filename, directory, channels):
+    """
+    Some shots have ECEI data missing for single channels but it's not denoted
+    with the proper key flag and yields a dataset in the hdf5 file that returns 
+    None. This function fixes one of those files to follow the correct missing 
+    channel rules.
+
+    Args:
+        filename: str, file in question
+        directory: str, path to directory containing files
+    """
+    if np.random.uniform() < 1/100:
+        print("Fixing "+filename)
+
+    file_path = os.path.join(directory, filename)
+
+    backup_path = file_path+'.backup'
+    shutil.copy(file_path, backup_path)
+
+    keys = []
+
+    try:
+        extra_data = False
+        with h5py.File(file_path, 'a') as original_file:
+            keys = list(original_file.keys())
+            if len(keys) < 161:
+                for chan in channels:
+                    if chan not in keys and 'missing_'+chan not in keys:
+                        original_file.create_dataset('missing_'+chan,\
+                                data = np.array([-1.0]))
+
+            if len(keys) > 161:
+                extra_data = True
+                print("File "+filename+" has more than 161 datasets!")
+                print(len(keys))
+                modified_data = {}
+                time = np.asarray(original_file.get('time'))
+                print("Got time!")
+                for key in keys:
+                    if key.startswith('missing') and key[8:] in keys:
+                        data = np.asarray(original_file.get(key[8:]))
+                        print("Got data from dupe channel")
+                        print(data.shape,time.shape)
+                        if data.shape[0] == time.shape[0]:
+                            print("Dupe channel had real data")
+                            modified_data[key[8:]] = data
+                        else:
+                            print("Dupe Channel was actually missing")
+                            modified_data[key] = np.array([-1.0])
+                    elif key.startswith('missing') and key[8:] not in keys:
+                        modified_data[key] = np.array([-1.0])
+                    elif ((not key.startswith('missing')) and\
+                            ('missing_'+key not in keys)):
+                        modified_data[key] = np.asarray(original_file.get(key))
+                
+            #for key in original_file.keys():
+            #    if not key.startswith('missing') and (original_file.get(key) is None\
+            #            or not isinstance(original_file.get(key), h5py.Dataset)):
+            #        print("Found a bad channel!")
+            #        print(key)
+            #        modified_data['missing_'+key] = np.array([-1.0])
+            #    else:
+            #        modified_data[key] = np.asarray(original_file.get(key))
+
+        #modified_file_path = file_path + '.modified'
+        #with h5py.File(modified_file_path, 'w') as modified_file:
+        #    for key, data in modified_data.items():
+        #        modified_file.create_dataset(key, data=data)
+    except Exception as e:
+        print("Encountered error when fixing "+filename+":")
+        print(e)
+        print("Check file location to make sure backup file is in good shape.")
+
+    if extra_data:
+        modified_file_path = file_path + '.modified'
+        with h5py.File(modified_file_path, 'w') as modified_file:
+            for key, data in modified_data.items():
+                modified_file.create_dataset(key, data=data)
+            keys = list(modified_file.keys())
+
+        os.remove(file_path)
+        os.rename(modified_file_path, file_path)
+
+    assert len(keys) == 161,"The keys list is "+str(len(keys))+" long for "+filename
+
+    os.remove(backup_path)
+
 
 
 def downsample_file(filename, decimation_factor, data_dir, save_dir):
@@ -724,6 +814,39 @@ class ECEI:
                         f.close()
 
         report.close()
+
+
+    def Fix_None_Channels_Directory(self, directory):
+        """
+        Given a directory, check each file if it has any None datasets and fix
+        them.
+
+        Args:
+            directory: str, path to the directory where all the shots are
+                       stored
+        """
+        file_list = [f for f in os.listdir(directory) if f.endswith('.hdf5')]
+        num_shots = len(file_list)
+        print("Checking for and fixing None datasets for the {} shots in "\
+              .format(int(num_shots))+directory)
+        t_b = time.time()
+
+        print(f"Running on {int(os.cpu_count()*0.9)} processes.")
+        workers = 10#int(os.cpu_count()*0.9)
+        with ProcessPoolExecutor(max_workers = workers) as executor:
+            # Process all files in parallel and collect results
+            try:
+                # Process a subset of files for debugging purposes
+                results = list(executor.map(Fix_None_Channels, file_list,\
+                               [directory]*num_shots, [self.ecei_channels]*\
+                               num_shots))
+            except Exception as e:
+                print(f"An error occurred: {e}")
+
+        t_e = time.time()
+        T = t_e-t_b
+
+        print("Finished fixing Nones in {} seconds.".format(T))
 
 
 

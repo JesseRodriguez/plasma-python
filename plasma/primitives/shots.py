@@ -371,19 +371,19 @@ class Shot(object):
         # guarantee ordering
         return [self.signals_dict[sig] for sig in self.signals]
 
-    def preprocess(self, conf):
+    def preprocess(self, conf, verbose = True, just_checking = False):
         sys.stdout.write('\rrecomputing {}'.format(self.number))
         sys.stdout.flush()
         # get minmax times
         time_arrays, signal_arrays, t_min, t_max, valid = (
-            self.get_signals_and_times_from_file(conf))
+            self.get_signals_and_times_from_file(conf, verbose))
         self.valid = valid
         # cut and resample
-        if self.valid:
+        if self.valid and not just_checking:
             self.cut_and_resample_signals(
                 time_arrays, signal_arrays, t_min, t_max, conf)
 
-    def get_signals_and_times_from_file(self, conf):
+    def get_signals_and_times_from_file(self, conf, verbose = True):
         valid = True
         t_min = -np.Inf
         t_max = np.Inf
@@ -407,12 +407,12 @@ class Shot(object):
             if isinstance(signal_prepath, list):
                 for prepath in signal_prepath:
                     t, sig, valid_signal = signal.load_data(
-                        prepath, self, conf['data']['floatx'])
+                        prepath, self, conf['data']['floatx'], verbose)
                     if valid_signal:
                         break
             else:
                 t, sig, valid_signal = signal.load_data(
-                    signal_prepath, self, conf['data']['floatx'])
+                    signal_prepath, self, conf['data']['floatx'], verbose)
             if not valid_signal:
                 # TODO(KGF): new check added from fork in Dec 2019.
                 # Add [omit] print?
@@ -439,12 +439,13 @@ class Shot(object):
                     t_max_total = np.max(t) + tol
                     if self.t_disrupt > t_max_total:
                         if garbage is False:
-                            print('Shot {}: disruption event '.format(
-                                self.number),
-                                  'is not contained in valid time region of ',
-                                  'signal {} by {}s [omit]'.format(
-                                      self.number, signal,
-                                      self.t_disrupt - np.max(t)))
+                            if verbose:
+                                print('Shot {}: disruption event '.format(
+                                    self.number),
+                                    'is not contained in valid time region of ',
+                                    'signal {} by {}s [omit]'.format(
+                                    self.number, signal,
+                                    self.t_disrupt - np.max(t)))
                             valid = False
                         else:
                             # Set the entire channel to zero to prevent any
@@ -464,8 +465,9 @@ class Shot(object):
         dt = conf['data']['dt']
         if (t_max - t_min)/dt <= (2*conf['model']['length']
                                   + conf['data']['T_min_warn']):
-            print('Shot {} contains insufficient data [omit]'.format(
-                self.number))
+            if verbose:
+                print('Shot {} contains insufficient data [omit]'.format(
+                    self.number))
             valid = False
 
         assert t_max > t_min or not valid, (
@@ -476,8 +478,9 @@ class Shot(object):
             t_max = self.t_disrupt
         if invalid_signals > 3:
             # Omit shot if more than 3 channels are bad
-            print('Shot {}: has more than 3 invalid channels [omit]'.format(
-                self.number))
+            if verbose:
+                print('Shot {}: has more than 3 invalid channels [omit]'.format(
+                    self.number))
             valid = False
         # if the signal has np.max(t) < t_disrupt, but t_max_total (with
         # positive tolerance) > t_disrupt, then the signal is implicitly
