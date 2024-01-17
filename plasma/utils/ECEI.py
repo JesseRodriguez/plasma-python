@@ -157,19 +157,6 @@ def Fix_None_Channels(filename, directory, channels):
                             ('missing_'+key not in keys)):
                         modified_data[key] = np.asarray(original_file.get(key))
                 
-            #for key in original_file.keys():
-            #    if not key.startswith('missing') and (original_file.get(key) is None\
-            #            or not isinstance(original_file.get(key), h5py.Dataset)):
-            #        print("Found a bad channel!")
-            #        print(key)
-            #        modified_data['missing_'+key] = np.array([-1.0])
-            #    else:
-            #        modified_data[key] = np.asarray(original_file.get(key))
-
-        #modified_file_path = file_path + '.modified'
-        #with h5py.File(modified_file_path, 'w') as modified_file:
-        #    for key, data in modified_data.items():
-        #        modified_file.create_dataset(key, data=data)
     except Exception as e:
         print("Encountered error when fixing "+filename+":")
         print(e)

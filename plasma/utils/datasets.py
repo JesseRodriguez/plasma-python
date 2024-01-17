@@ -9,6 +9,7 @@ from os import listdir  # , remove
 import time
 import sys
 import os
+import shutil
 from itertools import combinations
 from functools import partial
 
@@ -120,6 +121,8 @@ class DatasetBuilder(object):
                     format(len(used_shots), used_shots.num_disruptive()))
             file.write('Signal group hash:'+str(h)+'\n\n\n')
 
+        self.sort_dataset_file(os.path.join(self.record_dir, record_name))
+
         return
 
 
@@ -134,3 +137,72 @@ class DatasetBuilder(object):
         return shot
         
 
+    def sort_dataset_file(self, file_path):
+        """
+        Sorts the dataset file by number of shots
+
+        Args:
+            file_path: str, path to dataset info file
+        """
+        num_files_preamble = 'The valid dataset contains '
+
+        with open(file_path, 'r') as file:
+            data = file.read()
+
+        dataset_info = []
+        num_shots = []
+        data_len = len(data)
+        L_s = len(num_files_preamble)
+        for i in range(data_len-L_s+1):
+            if data[i:i+L_s] == num_files_preamble:
+                j = 0
+                found_start = False
+                while not found_start:
+                    if data[i+L_s-j] == '-':
+                        start = i+L_s-j
+                        found_start = True
+                    j += 1
+
+                j = 0
+                found_end = False
+                while not found_end:
+                    if data[i+L_s+j] == '-':
+                        end = i+L_s+j
+                        found_end = True
+                    j += 1
+                    if i+L_s+j == data_len - 1:
+                        end = data_len - 1
+                        found_end = True
+                dataset_info.append(data[start-79:end])
+
+                j = 0
+                found_end = False
+                while not found_end:
+                    if data[i+L_s+j] == ' ':
+                        end = i+L_s+j
+                        found_end = True
+                    j += 1
+                num_shots.append(int(data[i+L_s:end]))
+                
+        combined = sorted(zip(num_shots, dataset_info), reverse = True)
+        num_shots_sorted, dataset_info_sorted = zip(*combined)
+        num_shots_sorted = list(num_shots_sorted)
+        dataset_info_sorted = list(dataset_info_sorted)
+        
+        backup_path = file_path+'.backup'
+        shutil.copy(file_path, backup_path)
+        modified_file_path = file_path + '.modified'
+        try:
+            with open(modified_file_path, 'w') as modified_file:
+                for info in dataset_info_sorted:
+                    modified_file.write(info)
+        except Exception as e:
+            print("Exception:")
+            print(e)
+            print("Check backup dataset info file to make sure it's ok.")
+
+        os.remove(file_path)
+        os.rename(modified_file_path, file_path)
+        os.remove(backup_path)
+
+        return
