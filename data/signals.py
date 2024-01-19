@@ -394,14 +394,14 @@ ipdirectt = Signal("plasma current direction tol", ["iptdirect"], [d3d],
 ecei = Signal2D("ECEi", ['ECEI_1kHz'], [d3d], (20,8),
                 is_ecei = True, miss_chan_threshold = 40)
 
-eceit = Signal2D("ECEi", ['ECEI_1kHz'], [d3d], (20,8),
+eceit = Signal2D("ECEi tol", ['ECEI_1kHz'], [d3d], (20,8),
                 is_ecei = True, miss_chan_threshold = 159)
 
-ecei_hfs = Signal2D("ECEi", ['ECEI_HFS_1kHz'], [d3d], (20,8),
-                is_ecei = True, miss_chan_threshold = 40)
+ecei_hfs = Signal2D("ECEi HFS", ['ECEI_HFS_1kHz'], [d3d], (20,8),
+                is_ecei = True, miss_chan_threshold = 40, side = 'HFS')
 
-ecei_hfst = Signal2D("ECEi", ['ECEI_HFS_1kHz'], [d3d], (20,8),
-                is_ecei = True, miss_chan_threshold = 159)
+ecei_hfst = Signal2D("ECEi HFS tol", ['ECEI_HFS_1kHz'], [d3d], (20,8),
+                is_ecei = True, miss_chan_threshold = 159, side = 'HFS')
 
 # for downloading, modify this to preprocess shots with only a subset of
 # signals. This may produce more shots
@@ -412,29 +412,31 @@ ecei_hfst = Signal2D("ECEi", ['ECEI_HFS_1kHz'], [d3d], (20,8),
 # dataset.
 
 all_signals = {
-    #'q95': q95, 'li': li, 'ip': ip, 'betan': betan, 'energy': energy, 'lm': lm,
-    #'dens': dens, 'pradcore': pradcore,
-    #'pradedge': pradedge, 'pradtot': pradtot, 'pin': pin,
-    #'torquein': torquein,
-    #'energydt': energydt, 'ipdirect': ipdirect, 'iptarget': iptarget,
-    #'iperr': iperr,
+    'q95': q95, 'li': li, 'ip': ip, 'betan': betan, 'energy': energy, 'lm': lm,
+    'dens': dens, 'pradcore': pradcore,
+    'pradedge': pradedge, 'pradtot': pradtot, 'pin': pin,
+    'torquein': torquein,
+    'energydt': energydt, 'ipdirect': ipdirect, 'iptarget': iptarget,
+    'iperr': iperr,
     # 'tmamp1':tmamp1, 'tmamp2':tmamp2, 'tmfreq1':tmfreq1, 'tmfreq2':tmfreq2,
     # 'pechin':pechin,
     # 'rho_profile_spatial':rho_profile_spatial, 'etemp':etemp,
     # -----
+    #'lm': lm, 'q95': q95, 'iptarget': iptarget, 'dens': dens,
+    #'energy': energy,#'ip': ip,  'iperr': iperr,
     # TODO(KGF): replace this hacky workaround
     # IMPORTANT: must comment-out the following line when preprocessing for
     # training on JET CW and testing on JET ILW (FRNN 0D).
     # Otherwise 1K+ CW shots are excluded due to missing profile data
-    # 'etemp_profile': etemp_profile, 'edens_profile': edens_profile,
-    # 'itemp_profile':itemp_profile, 'zdens_profile':zdens_profile,
+    'etemp_profile': etemp_profile, 'edens_profile': edens_profile,
+    #'itemp_profile':itemp_profile, 'zdens_profile':zdens_profile,
     # 'trot_profile':trot_profile, 'pthm_profile':pthm_profile,
     # 'neut_profile':neut_profile, 'q_profile':q_profile,
     # 'bootstrap_current_profile':bootstrap_current_profile,
     # 'q_psi_profile':q_psi_profile}
 
     # KGF(2021-12-15): exclude ecei by default, for now:
-    'ecei': ecei#, 'ecei_hfs': ecei_hfs
+    'ecei': ecei, 'ecei_hfs': ecei_hfs
 }
 
 all_signals_max_tol = {

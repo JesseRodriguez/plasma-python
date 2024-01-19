@@ -428,7 +428,7 @@ class Signal2D(Signal):
     def __init__(self, description, paths, machines, dims, is_ecei = False, 
                  miss_chan_threshold = 80, tex_label=None, causal_shifts=None,
                  is_ip=False, normalize=True, data_avail_tolerances=None,
-                 is_strictly_positive=False, mapping_paths=None):
+                 is_strictly_positive=False, mapping_paths=None, side = 'LFS'):
         super(Signal2D, self).__init__(
             description, paths, machines,
             tex_label=tex_label, causal_shifts=causal_shifts,
@@ -439,6 +439,7 @@ class Signal2D(Signal):
         self.dims = dims
         self.num_channels = dims[0]*dims[1]
         self.is_ecei = is_ecei
+        self.side = side
         self.miss_chan_threshold = miss_chan_threshold
 
 
@@ -489,7 +490,7 @@ class Signal2D(Signal):
 
         if self.is_ecei:
             try:
-                E = ECEI()
+                E = ECEI(side = self.side)
                 f = h5py.File(file_path, 'r')
                 miss_count = 0
                 missing = []
